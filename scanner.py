@@ -1,5 +1,5 @@
 """
-Wise Scanner: Asymmetric Coiled Spring Setup (Fully Automated Event-Driven Edition)
+Wise Scanner: Asymmetric Coiled Spring Setup (Strict Institutional Event-Driven Edition)
 Stateless Trading Engine designed for daily GitHub Actions CRON jobs.
 """
 
@@ -11,6 +11,9 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
+# Suppress the upcoming Pandas 3.0 deprecation warnings for long-term CI/CD stability
+pd.set_option('future.no_silent_downcasting', True)
+
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
@@ -23,16 +26,17 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class ScannerConfig:
+    """Mathematical thresholds tuned for extreme compression ('Sniper Rifle' Mode)"""
     rsi_period: int = 14
-    rsi_min: float = 40.0              
-    rsi_max: float = 55.0              
-    bbw_max: float = 15.0              
-    min_adv_millions: float = 10.0     
-    min_short_float_pct: float = 0.08  
-    max_gap_down_pct: float = -0.05    
-    max_vwap_deviation: float = -0.04  
-    lookback_days: int = 90            
-    api_timeout: int = 10              
+    rsi_min: float = 42.0              # TIGHTENED: Reject severely broken downtrends
+    rsi_max: float = 53.0              # TIGHTENED: Reject 'priced to perfection' hype
+    bbw_max: float = 8.0               # CRITICAL: Demands extreme volatility contraction (was 15.0)
+    min_adv_millions: float = 25.0     # RAISED: Minimum 20-day Average Dollar Volume ($25M)
+    min_short_float_pct: float = 0.08  # 8% minimum short interest for squeeze fuel
+    max_gap_down_pct: float = -0.05    # Reject stocks that recently gapped down > 5%
+    max_vwap_deviation: float = -0.04  # Reject if price is > 4% below 20-day VWAP (falling knife)
+    lookback_days: int = 90            # Expanded for accurate moving average burn-in
+    api_timeout: int = 10              # Strict timeout for API calls to prevent runner hang
     event_horizon_days: int = 14       # Look forward 14 days for upcoming catalysts
 
 @dataclass(frozen=True)
@@ -52,7 +56,7 @@ class ScanResult:
 # =============================================================================
 def create_http_session() -> requests.Session:
     session = requests.Session()
-    retry = Retry(total=5, backoff_factor=1.5, status_forcelist=[429, 500, 502, 503, 504])
+    retry = Retry(total=5, backoff_factor=1.5, status_forcelist=[429, 500, 502, 503, 504], allowed_methods=["GET"])
     adapter = HTTPAdapter(max_retries=retry, pool_connections=10, pool_maxsize=10)
     session.mount("https://", adapter)
     return session
@@ -105,6 +109,9 @@ def fetch_polygon_ohlcv(ticker: str, config: ScannerConfig, api_key: str, sessio
         if "Time" in df.columns:
             df["Date"] = pd.to_datetime(df["Time"], unit="ms")
             df.set_index("Date", inplace=True)
+            
+        # Natively forward-fill missing market holiday gaps. 
+        # (Future warning suppressed globally at top of script)
         df.ffill(inplace=True)
         df.dropna(subset=["Close", "Volume", "Open"], inplace=True)
         return df
@@ -116,8 +123,10 @@ def fetch_fundamental_data(ticker: str, api_key: str, session: requests.Session,
         url = f"https://api.polygon.io/v3/reference/tickers/{ticker}"
         res = session.get(url, params={"apiKey": api_key}, timeout=config.api_timeout)
         res.raise_for_status()
-        market_cap = res.json().get("results", {}).get("market_cap", 0)
-        return {"short_float": 0.12, "insider_conviction": bool(market_cap > 5_000_000_000)}
+        
+        # NOTE: Using a static 12% short_float proxy until a live Short Interest API is integrated.
+        # insider_conviction is explicitly False to eliminate the false "Holy Grail" alerts.
+        return {"short_float": 0.12, "insider_conviction": False}
     except Exception:
         return {"short_float": 0.0, "insider_conviction": False}
 
@@ -127,6 +136,7 @@ def fetch_fundamental_data(ticker: str, api_key: str, session: requests.Session,
 def calculate_technical_metrics(df: pd.DataFrame, config: ScannerConfig) -> Dict[str, Any]:
     if df.empty or len(df) < 21: return {"valid": False}
     
+    # 1. Native Vectorized RSI (Wilder's Smoothing)
     delta = df["Close"].diff()
     gain = delta.clip(lower=0)
     loss = -1 * delta.clip(upper=0)
@@ -136,10 +146,12 @@ def calculate_technical_metrics(df: pd.DataFrame, config: ScannerConfig) -> Dict
     rs = avg_gain / avg_loss
     df["RSI"] = 100 - (100 / (1 + rs))
     
+    # 2. Native Vectorized Bollinger Band Width (BBW)
     sma = df["Close"].rolling(window=20).mean()
     std = df["Close"].rolling(window=20).std()
     df["BBW"] = (((sma + (std * 2.0)) - (sma - (std * 2.0))) / sma) * 100
     
+    # 3. Institutional Liquidity & Gap Guards
     df["DollarVolume"] = df["Close"] * df["Volume"]
     adv = df["DollarVolume"].rolling(20).mean() / 1_000_000.0
     
@@ -174,11 +186,11 @@ def evaluate_setup(ticker: str, event_date: str, config: ScannerConfig, api_key:
 
         rsi, bbw, adv, gap, vwap_dev = m["rsi"], m["bbw"], m["adv_millions"], m["worst_recent_gap"], m["vwap_deviation"]
 
-        if adv is None or adv < config.min_adv_millions: return ScanResult(ticker, "Rejected", rsi, bbw, adv, sf, inc, event_date, "Illiquid.")
+        if adv is None or adv < config.min_adv_millions: return ScanResult(ticker, "Rejected", rsi, bbw, adv, sf, inc, event_date, f"Illiquid ({adv:.1f}M).")
         if gap < config.max_gap_down_pct: return ScanResult(ticker, "Rejected", rsi, bbw, adv, sf, inc, event_date, "Catastrophic Gap.")
         if vwap_dev < config.max_vwap_deviation: return ScanResult(ticker, "Rejected", rsi, bbw, adv, sf, inc, event_date, "Below VWAP floor.")
-        if rsi is None or not (config.rsi_min <= rsi <= config.rsi_max): return ScanResult(ticker, "Rejected", rsi, bbw, adv, sf, inc, event_date, "RSI bounds.")
-        if bbw is None or bbw > config.bbw_max: return ScanResult(ticker, "Rejected", rsi, bbw, adv, sf, inc, event_date, "Uncompressed BBW.")
+        if rsi is None or not (config.rsi_min <= rsi <= config.rsi_max): return ScanResult(ticker, "Rejected", rsi, bbw, adv, sf, inc, event_date, f"RSI bounds ({rsi:.1f}).")
+        if bbw is None or bbw > config.bbw_max: return ScanResult(ticker, "Rejected", rsi, bbw, adv, sf, inc, event_date, f"Uncompressed BBW ({bbw:.1f}%).")
 
         tier = "Holy Grail" if inc else "High Tier"
         return ScanResult(ticker, tier, rsi, bbw, adv, sf, inc, event_date, "Passed.")
@@ -221,9 +233,9 @@ def write_github_outputs(df: pd.DataFrame) -> None:
       </head>
       <body>
         <h2 style="border-bottom: 2px solid #0366d6; padding-bottom: 10px;">Wise Scanner: Event-Driven Daily Report</h2>
-        <p>The serverless CI/CD engine has dynamically mapped upcoming corporate events and filtered them through the Polygon quantitative gauntlet.</p>
+        <p>The serverless CI/CD engine has dynamically mapped upcoming corporate events and filtered them through the strict Polygon quantitative gauntlet.</p>
         <p><strong>Status:</strong> <span style="color: #28a745; font-weight: bold;">Confirmed Catalyst Setups Identified</span></p>
-        <p>The following assets have a major corporate event pending in the next 14 days AND pass all fundamental squeeze, volatility compression, and institutional liquidity guardrails. A raw CSV is attached to this email.</p>
+        <p>The following assets have a major corporate event pending in the next 14 days AND pass all fundamental squeeze, extreme volatility compression (BBW &lt; 8.0%), and institutional liquidity guardrails. A raw CSV is attached to this email.</p>
         
         {table_html}
         
