@@ -1,5 +1,5 @@
 """
-Wise Scanner: Asymmetric Coiled Spring Setup (Polygon CI/CD Edition)
+Wise Scanner: Asymmetric Coiled Spring Setup (Zero-Dependency Edition)
 Stateless Trading Engine designed for daily GitHub Actions CRON jobs.
 """
 
@@ -11,7 +11,6 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
-import pandas_ta as ta
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
@@ -89,14 +88,27 @@ def fetch_fundamental_data(ticker: str, api_key: str, session: requests.Session,
         return {"short_float": 0.0, "insider_conviction": False}
 
 # =============================================================================
-# 3. VECTORIZED MATH & LOGIC
+# 3. PURE NATIVE VECTORIZED MATH (NO EXTERNAL LIBRARIES)
 # =============================================================================
 def calculate_technical_metrics(df: pd.DataFrame, config: ScannerConfig) -> Dict[str, Any]:
     if df.empty or len(df) < 21: return {"valid": False}
     
-    rsi = ta.rsi(df["Close"], length=config.rsi_period)
-    bbands = ta.bbands(df["Close"], length=20, std=2.0)
+    # 1. Native Vectorized RSI (Wilder's Smoothing)
+    delta = df["Close"].diff()
+    gain = delta.clip(lower=0)
+    loss = -1 * delta.clip(upper=0)
     
+    avg_gain = gain.ewm(alpha=1/config.rsi_period, min_periods=config.rsi_period, adjust=False).mean()
+    avg_loss = loss.ewm(alpha=1/config.rsi_period, min_periods=config.rsi_period, adjust=False).mean()
+    rs = avg_gain / avg_loss
+    df["RSI"] = 100 - (100 / (1 + rs))
+    
+    # 2. Native Vectorized Bollinger Band Width (BBW)
+    sma = df["Close"].rolling(window=20).mean()
+    std = df["Close"].rolling(window=20).std()
+    df["BBW"] = (((sma + (std * 2.0)) - (sma - (std * 2.0))) / sma) * 100
+    
+    # 3. Institutional Liquidity & Gap Guards
     df["DollarVolume"] = df["Close"] * df["Volume"]
     adv = df["DollarVolume"].rolling(20).mean() / 1_000_000.0
     
@@ -104,13 +116,15 @@ def calculate_technical_metrics(df: pd.DataFrame, config: ScannerConfig) -> Dict
     df["VWAP_Deviation"] = (df["Close"] - vwap_20) / vwap_20
     df["Overnight_Gap"] = (df["Open"] - df["Close"].shift(1)) / df["Close"].shift(1)
 
-    if rsi is None or bbands is None or rsi.dropna().empty: return {"valid": False}
-    bbw_col = [col for col in bbands.columns if col.startswith("BBB_")]
-    bbw_val = float(bbands[bbw_col[0]].iloc[-1]) if bbw_col else None
+    if pd.isna(df["RSI"].iloc[-1]) or pd.isna(df["BBW"].iloc[-1]): 
+        return {"valid": False}
     
     return {
-        "valid": True, "rsi": float(rsi.iloc[-1]), "bbw": bbw_val, 
-        "adv_millions": float(adv.iloc[-1]), "worst_recent_gap": float(df["Overnight_Gap"].tail(3).min()),
+        "valid": True, 
+        "rsi": float(df["RSI"].iloc[-1]), 
+        "bbw": float(df["BBW"].iloc[-1]), 
+        "adv_millions": float(adv.iloc[-1]), 
+        "worst_recent_gap": float(df["Overnight_Gap"].tail(3).min()),
         "vwap_deviation": float(df["VWAP_Deviation"].iloc[-1])
     }
 
@@ -144,12 +158,8 @@ def evaluate_setup(ticker: str, config: ScannerConfig, api_key: str, session: re
 # 4. ORCHESTRATOR & GITHUB CI/CD EXPORT 
 # =============================================================================
 def write_github_outputs(df: pd.DataFrame) -> None:
-    """Writes files strictly required by the YAML Action configuration."""
-    
-    # 1. Output CSV for the YAML actions/upload-artifact step (Audit History)
     df.to_csv("daily_report.csv", index=False)
     
-    # 2. Write Markdown to the native GitHub Actions UI dashboard
     summary_file = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary_file:
         try:
@@ -162,13 +172,9 @@ def write_github_outputs(df: pd.DataFrame) -> None:
         except Exception as e:
             logger.error(f"Failed to write GitHub summary: {e}")
 
-    # 3. Stop here if empty to prevent generating an empty email table
-    if df.empty:
-        return
+    if df.empty: return
 
-    # 4. Render Pandas DataFrame as beautifully styled, mobile-responsive HTML
     table_html = df.to_html(index=False, border=0, classes="dataframe", justify="left")
-    
     run_url = f"{os.environ.get('GITHUB_SERVER_URL', '')}/{os.environ.get('GITHUB_REPOSITORY', '')}/actions/runs/{os.environ.get('GITHUB_RUN_ID', '')}"
     
     full_html = f"""
@@ -206,7 +212,7 @@ def run_daily_scan(tickers: List[str]):
     api_key = os.environ.get("POLYGON_API_KEY")
     if not api_key: 
         logger.error("CRITICAL: POLYGON_API_KEY env var missing. Halting execution.")
-        sys.exit(1) # Ensures the YAML failure block triggers properly
+        sys.exit(1) 
 
     config, session, results = ScannerConfig(), create_http_session(), []
     logger.info(f"Initiating engine for {len(tickers)} tickers via Polygon.io...")
@@ -229,7 +235,7 @@ def run_daily_scan(tickers: List[str]):
     except Exception as e:
         logger.error(f"Fatal execution crash: {e}")
         session.close()
-        sys.exit(1) # Triggers failure email for unhandled main-loop exceptions
+        sys.exit(1) 
         
     session.close()
     
