@@ -1,0 +1,101 @@
+name: Wise Scanner Engine Daily Run
+
+on:
+  schedule:
+    # Runs at 9:30 PM UTC (4:30 PM EST) Mon-Fri (30 min after US market close)
+    - cron: "30 21 * * 1-5" 
+  workflow_dispatch: 
+
+# IMPROVEMENT 3: Concurrency Control to protect API limits
+concurrency:
+  group: "wise-scanner-production"
+  cancel-in-progress: true
+
+jobs:
+  run-quant-engine:
+    runs-on: ubuntu-latest
+    # IMPROVEMENT 3: Hard timeout protects compute billing if the API hangs
+    timeout-minutes: 15 
+    
+    steps:
+      - name: 📥 Checkout Repository
+        uses: actions/checkout@v4
+        
+      - name: 🐍 Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip" # Caches packages for faster execution
+          
+      - name: 📦 Install Python Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pandas pandas-ta requests urllib3 tabulate
+
+      - name: 🚀 Execute Wise Scanner Engine
+        id: run_engine
+        env:
+          POLYGON_API_KEY: ${{ secrets.POLYGON_API_KEY }}
+        run: |
+          # Python script natively generates daily_report.csv and email_table.html
+          python scanner.py
+          
+          # Native state passing based on file existence
+          if [ -s "email_table.html" ]; then
+            echo "setups_found=true" >> $GITHUB_OUTPUT
+          else
+            echo "setups_found=false" >> $GITHUB_OUTPUT
+          fi
+          
+      # IMPROVEMENT 2: Artifact Retention for Historical Backtesting
+      - name: 💾 Store Daily Report Artifact
+        # Runs even if the python script fails midway, saving any partial data
+        if: always() 
+        uses: actions/upload-artifact@v4
+        with:
+          name: wise-scanner-daily-csv
+          path: daily_report.csv
+          retention-days: 90
+          if-no-files-found: ignore
+
+      - name: 🟢 Dispatch Success Alert (Actionable Setups Found)
+        if: steps.run_engine.outputs.setups_found == 'true'
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          secure: true
+          username: ${{ secrets.MAIL_USERNAME }}
+          password: ${{ secrets.MAIL_PASSWORD }} 
+          subject: "🟢 Wise Scanner ALERT: Asymmetric Coiled Springs Identified"
+          to: ${{ secrets.ALERT_EMAIL_ADDRESS }}
+          from: "Wise Scanner Quant Engine"
+          # Natively reads the HTML file and attaches the raw CSV data
+          html_body: file://email_table.html
+          attachments: daily_report.csv
+
+      # IMPROVEMENT 1: Dead-Letter Alert for Pipeline Crashes
+      - name: 🔴 Dispatch Failure Alert (Pipeline Crashed)
+        if: failure() # Only runs if the Python engine crashes (sys.exit(1))
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          secure: true
+          username: ${{ secrets.MAIL_USERNAME }}
+          password: ${{ secrets.MAIL_PASSWORD }} 
+          subject: "🔴 CRITICAL: Wise Scanner Quant Engine Crashed"
+          to: ${{ secrets.ALERT_EMAIL_ADDRESS }}
+          from: "Wise Scanner Quant Engine"
+          html_body: |
+            <html>
+              <body style="font-family: Arial, sans-serif; max-width: 800px; margin: auto;">
+                <h2 style="color: #cb2431; border-bottom: 2px solid #cb2431; padding-bottom: 10px;">Pipeline Execution Failure</h2>
+                <p>The serverless Python engine encountered a fatal error and crashed before completing the daily scan.</p>
+                <p>Please check the Polygon API quotas, network connectivity, or missing GitHub Secrets.</p>
+                <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" 
+                   style="background-color: #cb2431; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; font-weight: bold; display: inline-block; margin-top: 20px;">
+                   Investigate Crash Logs Immediately
+                </a>
+              </body>
+            </html>
