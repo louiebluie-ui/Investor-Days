@@ -17,9 +17,16 @@ jobs:
     # IMPROVEMENT 3: Hard timeout protects compute billing if the API hangs
     timeout-minutes: 15 
     
+    # REQUIRED: Grants the Action permission to commit the JSON file back to your repo
+    permissions:
+      contents: write
+    
     steps:
       - name: 📥 Checkout Repository
         uses: actions/checkout@v4
+        with:
+          # Required for git-auto-commit-action to work properly
+          ref: ${{ github.head_ref }}
         
       - name: 🐍 Set up Python 3.11
         uses: actions/setup-python@v5
@@ -32,15 +39,28 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      # -------------------------------------------------------------
+      # THE INVERSION FIREWALL: SCOUT & AUTO-COMMIT ARCHITECTURE
+      # -------------------------------------------------------------
+      - name: 📡 Run Scout: Auto-Update Investor Day Database
+        run: python scout.py
+
+      - name: 💾 Commit Updated Database to Repository
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "🤖 Auto-updated Investor Day Calendar via RSS Scout"
+          file_pattern: 'investor_days.json'
+
+      # -------------------------------------------------------------
+      # THE MATHEMATICAL GAUNTLET
+      # -------------------------------------------------------------
       - name: 🚀 Execute Wise Scanner Engine
         id: run_engine
         env:
           POLYGON_API_KEY: ${{ secrets.POLYGON_API_KEY }}
-          # REMOVED FINNHUB API KEY HERE
         run: |
           python scanner.py
 
-          
           # Native state passing based on file existence
           if [ -s "email_table.html" ]; then
             echo "setups_found=true" >> $GITHUB_OUTPUT
@@ -68,7 +88,7 @@ jobs:
           secure: true
           username: ${{ secrets.MAIL_USERNAME }}
           password: ${{ secrets.MAIL_PASSWORD }} 
-          subject: "🟢 Wise Scanner ALERT: Asymmetric Coiled Springs Identified"
+          subject: "🟢 Wise Scanner ALERT: Verified Asymmetric Coiled Springs"
           to: ${{ secrets.ALERT_EMAIL_ADDRESS }}
           from: "Wise Scanner Quant Engine"
           # Natively reads the HTML file and attaches the raw CSV data
