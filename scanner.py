@@ -3,6 +3,7 @@ Wise Scanner: Asymmetric Coiled Spring Setup (Munger Inversion Edition)
 Stateless Trading Engine designed strictly for deterministic Tech Investor Days.
 """
 
+import json
 import logging
 import os
 import sys
@@ -179,7 +180,11 @@ def write_github_outputs(df: pd.DataFrame) -> None:
         except Exception as e:
             logger.error(f"Failed to write GitHub summary: {e}")
 
-    if df.empty: return
+    if df.empty: 
+        # Create empty dummy file so the bash script skips the email dispatch
+        with open("email_table.html", "w") as f:
+            f.write("")
+        return
 
     table_html = df.to_html(index=False, border=0, classes="dataframe", justify="left")
     run_url = f"{os.environ.get('GITHUB_SERVER_URL', '')}/{os.environ.get('GITHUB_REPOSITORY', '')}/actions/runs/{os.environ.get('GITHUB_RUN_ID', '')}"
@@ -197,7 +202,7 @@ def write_github_outputs(df: pd.DataFrame) -> None:
       </head>
       <body>
         <h2 style="border-bottom: 2px solid #0366d6; padding-bottom: 10px;">Wise Scanner: Verified Tech Investor Days</h2>
-        <p>The serverless CI/CD engine has evaluated your manually verified list of upcoming strategic Tech Investor Days.</p>
+        <p>The serverless CI/CD engine has evaluated your dynamically updated list of upcoming strategic Tech Investor Days.</p>
         <p><strong>Status:</strong> <span style="color: #28a745; font-weight: bold;">Confirmed Asymmetric Setups</span></p>
         <p>The following assets are strictly 3 to 30 days away from their verified Investor Day and pass all volatility compression (BBW &lt; 8.0%) and institutional liquidity guardrails.</p>
         
@@ -264,17 +269,26 @@ if __name__ == "__main__":
         os.environ["POLYGON_API_KEY"] = "DEMO"
         
     # =========================================================================
-    # THE INVERSION FIREWALL: 
-    # Do not rely on free APIs for this. Check a corporate events calendar
-    # once a month and manually input verified Tech Investor Days here.
-    # Format: {"TICKER": "YYYY-MM-DD"}
+    # INVERSION ARCHITECTURE: DYNAMIC JSON INTEGRATION
+    # The scout.py script automatically hunts for PRs and builds this file.
+    # The quant engine dynamically reads it here.
     # =========================================================================
-    TARGET_INVESTOR_DAYS = {
-        "NVDA": "2026-11-15",
-        "CRM": "2026-10-25",
-        "CRWD": "2026-10-20",
-        "SNOW": "2026-11-05",
-        "PLTR": "2026-11-08"
-    }
-    
-    run_daily_scan(TARGET_INVESTOR_DAYS)
+    calendar_file = "investor_days.json"
+    if os.path.exists(calendar_file):
+        with open(calendar_file, "r") as f:
+            try:
+                dynamic_investor_days = json.load(f)
+            except json.JSONDecodeError:
+                dynamic_investor_days = {}
+    else:
+        # If the scout script hasn't run yet, default to an empty dictionary
+        dynamic_investor_days = {}
+        
+    if not dynamic_investor_days:
+        logger.info("No upcoming Investor Days found in the JSON database. Capital protected.")
+        # Create empty dummy files to ensure YAML steps don't crash
+        pd.DataFrame().to_csv("daily_report.csv", index=False)
+        with open("email_table.html", "w") as f:
+            f.write("")
+    else:
+        run_daily_scan(dynamic_investor_days)
