@@ -24,9 +24,6 @@ jobs:
     steps:
       - name: 📥 Checkout Repository
         uses: actions/checkout@v4
-        with:
-          # Required for git-auto-commit-action to work properly
-          ref: ${{ github.head_ref }}
         
       - name: 🐍 Set up Python 3.11
         uses: actions/setup-python@v5
