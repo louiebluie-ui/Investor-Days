@@ -2,11 +2,9 @@ name: Wise Scanner Engine Daily Run
 
 on:
   schedule:
-    # Runs at 9:30 PM UTC (4:30 PM EST) Mon-Fri (30 min after US market close)
     - cron: "30 21 * * 1-5" 
   workflow_dispatch: 
 
-# IMPROVEMENT 3: Concurrency Control to protect API limits
 concurrency:
   group: "wise-scanner-production"
   cancel-in-progress: true
@@ -14,10 +12,9 @@ concurrency:
 jobs:
   run-quant-engine:
     runs-on: ubuntu-latest
-    # IMPROVEMENT 3: Hard timeout protects compute billing if the API hangs
     timeout-minutes: 15 
     
-    # REQUIRED: Grants the Action permission to commit the JSON file back to your repo
+    # Grants the Action permission to commit the JSON file back to your repo
     permissions:
       contents: write
     
@@ -57,17 +54,14 @@ jobs:
           POLYGON_API_KEY: ${{ secrets.POLYGON_API_KEY }}
         run: |
           python scanner.py
-
-          # Native state passing based on file existence
+          
           if [ -s "email_table.html" ]; then
             echo "setups_found=true" >> $GITHUB_OUTPUT
           else
             echo "setups_found=false" >> $GITHUB_OUTPUT
           fi
           
-      # IMPROVEMENT 2: Artifact Retention for Historical Backtesting
       - name: 💾 Store Daily Report Artifact
-        # Runs even if the python script fails midway, saving any partial data
         if: always() 
         uses: actions/upload-artifact@v4
         with:
@@ -88,13 +82,11 @@ jobs:
           subject: "🟢 Wise Scanner ALERT: Verified Asymmetric Coiled Springs"
           to: ${{ secrets.ALERT_EMAIL_ADDRESS }}
           from: "Wise Scanner Quant Engine"
-          # Natively reads the HTML file and attaches the raw CSV data
           html_body: file://email_table.html
           attachments: daily_report.csv
 
-      # IMPROVEMENT 1: Dead-Letter Alert for Pipeline Crashes
       - name: 🔴 Dispatch Failure Alert (Pipeline Crashed)
-        if: failure() # Only runs if the Python engine crashes (sys.exit(1))
+        if: failure() 
         uses: dawidd6/action-send-mail@v3
         with:
           server_address: smtp.gmail.com
@@ -110,7 +102,6 @@ jobs:
               <body style="font-family: Arial, sans-serif; max-width: 800px; margin: auto;">
                 <h2 style="color: #cb2431; border-bottom: 2px solid #cb2431; padding-bottom: 10px;">Pipeline Execution Failure</h2>
                 <p>The serverless Python engine encountered a fatal error and crashed before completing the daily scan.</p>
-                <p>Please check the Polygon API quotas, network connectivity, or missing GitHub Secrets.</p>
                 <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" 
                    style="background-color: #cb2431; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; font-weight: bold; display: inline-block; margin-top: 20px;">
                    Investigate Crash Logs Immediately
