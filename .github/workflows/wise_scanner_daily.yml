@@ -2,11 +2,11 @@ name: Wise Scanner Engine Daily Run
 
 on:
   schedule:
-    - cron: "30 21 * * 1-5" 
-  workflow_dispatch: 
+    - cron: '30 21 * * 1-5'
+  workflow_dispatch:
 
 concurrency:
-  group: "wise-scanner-production"
+  group: wise-scanner-production
   cancel-in-progress: true
 
 jobs:
@@ -14,54 +14,46 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15 
     
-    # Grants the Action permission to commit the JSON file back to your repo
     permissions:
       contents: write
     
     steps:
-      - name: 📥 Checkout Repository
+      - name: Checkout Repository
         uses: actions/checkout@v4
         
-      - name: 🐍 Set up Python 3.11
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
-          cache: "pip"
+          python-version: '3.11'
+          cache: pip
           
-      - name: 📦 Install Python Dependencies
+      - name: Install Python Dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      # -------------------------------------------------------------
-      # THE INVERSION FIREWALL: SCOUT & AUTO-COMMIT ARCHITECTURE
-      # -------------------------------------------------------------
-      - name: 📡 Run Scout: Auto-Update Investor Day Database
+      - name: Run Scout
         run: python scout.py
 
-      - name: 💾 Commit Updated Database to Repository
+      - name: Commit Updated Database
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
-          commit_message: "🤖 Auto-updated Investor Day Calendar via RSS Scout"
-          file_pattern: 'investor_days.json'
+          commit_message: Auto-updated Investor Day Calendar
+          file_pattern: investor_days.json
 
-      # -------------------------------------------------------------
-      # THE MATHEMATICAL GAUNTLET
-      # -------------------------------------------------------------
-      - name: 🚀 Execute Wise Scanner Engine
+      - name: Execute Wise Scanner Engine
         id: run_engine
         env:
           POLYGON_API_KEY: ${{ secrets.POLYGON_API_KEY }}
         run: |
           python scanner.py
-          
           if [ -s "email_table.html" ]; then
             echo "setups_found=true" >> $GITHUB_OUTPUT
           else
             echo "setups_found=false" >> $GITHUB_OUTPUT
           fi
           
-      - name: 💾 Store Daily Report Artifact
+      - name: Store Daily Report Artifact
         if: always() 
         uses: actions/upload-artifact@v4
         with:
@@ -70,7 +62,7 @@ jobs:
           retention-days: 90
           if-no-files-found: ignore
 
-      - name: 🟢 Dispatch Success Alert (Actionable Setups Found)
+      - name: Dispatch Success Alert
         if: steps.run_engine.outputs.setups_found == 'true'
         uses: dawidd6/action-send-mail@v3
         with:
@@ -79,13 +71,13 @@ jobs:
           secure: true
           username: ${{ secrets.MAIL_USERNAME }}
           password: ${{ secrets.MAIL_PASSWORD }} 
-          subject: "🟢 Wise Scanner ALERT: Verified Asymmetric Coiled Springs"
+          subject: Wise Scanner ALERT Verified Asymmetric Coiled Springs
           to: ${{ secrets.ALERT_EMAIL_ADDRESS }}
-          from: "Wise Scanner Quant Engine"
+          from: Wise Scanner Quant Engine
           html_body: file://email_table.html
           attachments: daily_report.csv
 
-      - name: 🔴 Dispatch Failure Alert (Pipeline Crashed)
+      - name: Dispatch Failure Alert
         if: failure() 
         uses: dawidd6/action-send-mail@v3
         with:
@@ -94,17 +86,7 @@ jobs:
           secure: true
           username: ${{ secrets.MAIL_USERNAME }}
           password: ${{ secrets.MAIL_PASSWORD }} 
-          subject: "🔴 CRITICAL: Wise Scanner Quant Engine Crashed"
+          subject: CRITICAL Wise Scanner Quant Engine Crashed
           to: ${{ secrets.ALERT_EMAIL_ADDRESS }}
-          from: "Wise Scanner Quant Engine"
-          html_body: |
-            <html>
-              <body style="font-family: Arial, sans-serif; max-width: 800px; margin: auto;">
-                <h2 style="color: #cb2431; border-bottom: 2px solid #cb2431; padding-bottom: 10px;">Pipeline Execution Failure</h2>
-                <p>The serverless Python engine encountered a fatal error and crashed before completing the daily scan.</p>
-                <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" 
-                   style="background-color: #cb2431; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; font-weight: bold; display: inline-block; margin-top: 20px;">
-                   Investigate Crash Logs Immediately
-                </a>
-              </body>
-            </html>
+          from: Wise Scanner Quant Engine
+          body: The serverless Python engine encountered a fatal error and crashed before completing the daily scan.
